@@ -8,6 +8,7 @@ import redisConfig from './shared/config/redis.config';
 import { createTypeOrmOptions } from './infrastructure/database/typeorm.config';
 import { CodeSessionsModule } from './modules/code-sessions/code-sessions.module';
 import { ExecutionsModule } from './modules/executions/executions.module';
+import { SandboxModule } from './sandbox/sandbox.module';
 
 @Module({
   imports: [
@@ -21,6 +22,7 @@ import { ExecutionsModule } from './modules/executions/executions.module';
       inject: [ConfigService],
       useFactory: createTypeOrmOptions,
     }),
+    SandboxModule,
     CodeSessionsModule,
     ExecutionsModule,
   ],

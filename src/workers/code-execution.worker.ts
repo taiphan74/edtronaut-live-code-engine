@@ -13,6 +13,7 @@ import {
   JOB_NAME_RUN_CODE,
   QUEUE_NAME,
 } from '../infrastructure/queue/queue.constants';
+import { SandboxService } from '../sandbox/sandbox.service';
 import { Execution } from '../modules/executions/entities/execution.entity';
 import { ExecutionStatus } from '../modules/executions/entities/execution-status.enum';
 
@@ -21,15 +22,11 @@ type RunCodeJobData = {
 };
 
 const logger = new Logger('CodeExecutionWorker');
-const SIMULATED_EXECUTION_TIME_MS = 1000;
-
-function sleep(milliseconds: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, milliseconds));
-}
 
 async function processRunCodeJob(
   job: Job<RunCodeJobData>,
   executionsRepository: Repository<Execution>,
+  sandboxService: SandboxService,
 ): Promise<void> {
   if (job.name !== JOB_NAME_RUN_CODE) {
     return;
@@ -40,10 +37,17 @@ async function processRunCodeJob(
 
   const execution = await executionsRepository.findOne({
     where: { id: executionId },
+    relations: {
+      session: true,
+    },
   });
 
   if (!execution) {
     throw new Error(`Execution ${executionId} was not found.`);
+  }
+
+  if (!execution.session) {
+    throw new Error(`Code session for execution ${executionId} was not found.`);
   }
 
   const startedAt = new Date();
@@ -53,23 +57,37 @@ async function processRunCodeJob(
     execution.startedAt = startedAt;
     await executionsRepository.save(execution);
 
-    await sleep(SIMULATED_EXECUTION_TIME_MS);
+    const result = await sandboxService.runCode(
+      execution.session.language,
+      execution.session.sourceCode,
+    );
+    const finishedAt = new Date();
 
-    execution.status = ExecutionStatus.COMPLETED;
-    execution.finishedAt = new Date();
-    execution.stdout = 'Hello from worker';
-    execution.stderr = null;
-    execution.executionTimeMs = SIMULATED_EXECUTION_TIME_MS;
+    execution.status =
+      result.exitCode === 0
+        ? ExecutionStatus.COMPLETED
+        : ExecutionStatus.FAILED;
+    execution.finishedAt = finishedAt;
+    execution.stdout = result.stdout;
+    execution.stderr = result.stderr;
+    execution.exitCode = result.exitCode;
+    execution.executionTimeMs =
+      result.executionTimeMs ??
+      finishedAt.getTime() - execution.startedAt.getTime();
 
     await executionsRepository.save(execution);
   } catch (error) {
+    const finishedAt = new Date();
+
     execution.status = ExecutionStatus.FAILED;
-    execution.finishedAt = new Date();
+    execution.finishedAt = finishedAt;
     execution.stderr =
-      error instanceof Error ? error.message : 'Unknown worker error';
+      execution.stderr ??
+      (error instanceof Error ? error.message : 'Unknown worker error');
     execution.executionTimeMs = execution.startedAt
-      ? execution.finishedAt.getTime() - execution.startedAt.getTime()
-      : null;
+      ? execution.executionTimeMs ??
+        finishedAt.getTime() - execution.startedAt.getTime()
+      : execution.executionTimeMs;
 
     await executionsRepository.save(execution);
     throw error;
@@ -83,6 +101,7 @@ async function bootstrap() {
 
   const configService = app.get(ConfigService);
   const dataSource = app.get(DataSource);
+  const sandboxService = app.get(SandboxService);
   const executionsRepository = dataSource.getRepository(Execution);
   const connection = getSharedRedisConnection({
     host: configService.getOrThrow<string>('redis.host'),
@@ -91,7 +110,7 @@ async function bootstrap() {
 
   const worker = new Worker<RunCodeJobData>(
     QUEUE_NAME,
-    async (job) => processRunCodeJob(job, executionsRepository),
+    async (job) => processRunCodeJob(job, executionsRepository, sandboxService),
     {
       connection: connection as never,
     },
