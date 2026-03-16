@@ -6,6 +6,8 @@ import databaseConfig from './shared/config/database.config';
 import { validateEnvironment } from './shared/config/environment.validation';
 import redisConfig from './shared/config/redis.config';
 import { createTypeOrmOptions } from './infrastructure/database/typeorm.config';
+import { CodeSessionsModule } from './modules/code-sessions/code-sessions.module';
+import { ExecutionsModule } from './modules/executions/executions.module';
 
 @Module({
   imports: [
@@ -19,6 +21,8 @@ import { createTypeOrmOptions } from './infrastructure/database/typeorm.config';
       inject: [ConfigService],
       useFactory: createTypeOrmOptions,
     }),
+    CodeSessionsModule,
+    ExecutionsModule,
   ],
 })
 export class AppModule {}
