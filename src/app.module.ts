@@ -1,14 +1,24 @@
 import { Module } from '@nestjs/common';
-import { AppController } from './app.controller';
-import { AppService } from './app.service';
-import { CodeSessionsModule } from './code-sessions/code-sessions.module';
-import { ExecutionsModule } from './executions/executions.module';
-import { WorkerModule } from './worker/worker.module';
-import { SandboxModule } from './sandbox/sandbox.module';
+import { ConfigModule, ConfigService } from '@nestjs/config';
+import { TypeOrmModule } from '@nestjs/typeorm';
+import appConfig from './shared/config/app.config';
+import databaseConfig from './shared/config/database.config';
+import { validateEnvironment } from './shared/config/environment.validation';
+import redisConfig from './shared/config/redis.config';
+import { createTypeOrmOptions } from './infrastructure/database/typeorm.config';
 
 @Module({
-  imports: [CodeSessionsModule, ExecutionsModule, WorkerModule, SandboxModule],
-  controllers: [AppController],
-  providers: [AppService],
+  imports: [
+    ConfigModule.forRoot({
+      isGlobal: true,
+      cache: true,
+      load: [appConfig, databaseConfig, redisConfig],
+      validate: validateEnvironment,
+    }),
+    TypeOrmModule.forRootAsync({
+      inject: [ConfigService],
+      useFactory: createTypeOrmOptions,
+    }),
+  ],
 })
 export class AppModule {}
