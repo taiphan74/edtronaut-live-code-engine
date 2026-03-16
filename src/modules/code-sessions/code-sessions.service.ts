@@ -1,6 +1,7 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
+import { QueueService } from '../../infrastructure/queue/queue.service';
 import { Execution } from '../executions/entities/execution.entity';
 import { ExecutionStatus } from '../executions/entities/execution-status.enum';
 import { CreateCodeSessionDto } from './dto/create-code-session.dto';
@@ -15,6 +16,7 @@ export class CodeSessionsService {
     private readonly codeSessionsRepository: Repository<CodeSession>,
     @InjectRepository(Execution)
     private readonly executionsRepository: Repository<Execution>,
+    private readonly queueService: QueueService,
   ) {}
 
   async createSession(
@@ -70,6 +72,7 @@ export class CodeSessionsService {
     });
 
     const savedExecution = await this.executionsRepository.save(execution);
+    await this.queueService.enqueueCodeExecution(savedExecution.id);
 
     return {
       executionId: savedExecution.id,
