@@ -25,6 +25,18 @@ Service goals:
 
 The system is split into API, queue, worker, sandbox, and persistence layers.
 
+```mermaid
+flowchart TD
+    Client --> API
+    API --> DB[(PostgreSQL)]
+    API --> Queue[Redis / BullMQ]
+    Queue --> Worker
+    Worker --> Sandbox
+    Sandbox --> Runner
+    Runner --> Worker
+    Worker --> DB
+```
+
 ```text
 +-----------+      +-------------+      +-----------------+      +------------------+
 |  Client   | ---> | API Server  | ---> | BullMQ / Redis  | ---> | Worker Process   |
