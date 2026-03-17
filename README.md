@@ -326,6 +326,16 @@ Detailed flow:
    - `COMPLETED` when `exitCode === 0`
    - `FAILED` when `exitCode !== 0`
 
+## Autosave Behavior
+
+The editor should not send an API request on every keystroke. Doing so would generate excessive `PATCH /code-sessions/:sessionId` traffic, increase server load, and create unnecessary database writes during active typing.
+
+The expected strategy is debounced autosave: the client waits for a short idle window, typically `300-500ms`, after the user stops typing before sending the latest `sourceCode`. This keeps updates frequent enough for a responsive editing experience without turning typing into a request storm.
+
+In the current system, each autosave updates the persisted session source in PostgreSQL. That ensures `POST /code-sessions/:sessionId/run` always executes the most recently saved code, so the worker processes the latest available source.
+
+Benefits include lower API volume, reduced backend load, better perceived editor performance, and a more stable user experience. Future improvements may include diff-based updates or collaborative editing models such as CRDTs.
+
 ## 7. Queue & Worker Design
 
 Why use a queue:
