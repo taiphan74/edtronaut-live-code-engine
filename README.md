@@ -1,29 +1,46 @@
 # edtronaut-live-code-engine
 
-Backend service for asynchronous live code execution. The system lets clients create code sessions, update source code, trigger executions, and retrieve execution results after background processing.
+Asynchronous code execution backend built with NestJS, PostgreSQL, Redis, BullMQ, and Docker-based language sandboxes.
+
+## Quick Start
+
+```bash
+docker compose up --build
+```
+
+In a second terminal, start the worker:
+
+```bash
+npm install
+npm run build
+npm run build:sandbox
+npm run start:worker
+```
+
+The API will be available at `http://localhost:3000`.
 
 ## 1. Project Overview
 
-`edtronaut-live-code-engine` is a NestJS backend designed for live coding workflows where execution should not block API requests.
+`edtronaut-live-code-engine` is a backend service for live coding workflows where code execution must be asynchronous, traceable, and isolated from the request-response path.
 
-Typical use cases:
+Primary use cases:
 
-- online coding playgrounds
+- coding playgrounds
 - interview platforms
-- educational coding products
-- internal tools that need async code execution
+- education products
+- internal tools that need queued code execution
 
-Service goals:
+Core goals:
 
 - persist code sessions and execution history
-- enqueue execution requests asynchronously
-- process executions in a separate worker process
-- isolate execution orchestration from language-specific runners
-- provide a foundation that can later move from mock runners to real sandboxed execution
+- enqueue execution requests without blocking the API
+- process executions in a dedicated worker
+- run user code inside short-lived Docker containers
+- support multiple languages through a shared sandbox abstraction
 
 ## 2. System Architecture
 
-The system is split into API, queue, worker, sandbox, and persistence layers.
+The system is split into API, persistence, queue, worker, and sandbox layers.
 
 ```mermaid
 flowchart TD
@@ -44,77 +61,104 @@ POST /code-sessions/:sessionId/run
   -> create executions row with status QUEUED
   -> enqueue BullMQ job
   -> worker picks job
-  -> worker loads session + execution
+  -> worker loads execution + session
   -> worker calls SandboxService
-  -> SandboxService chooses runner by language
-  -> runner returns normalized result
-  -> worker updates execution row
+  -> SandboxService picks a language runner
+  -> runner executes code in Docker
+  -> worker writes final result to PostgreSQL
 ```
 
 Component roles:
 
-- `API Server`: validates requests, writes sessions and execution records, enqueues jobs
-- `PostgreSQL`: stores sessions, executions, and execution lifecycle data
-- `Redis / BullMQ`: stores asynchronous execution jobs
-- `Worker`: processes queued executions without blocking API traffic
-- `SandboxService`: language-agnostic orchestration layer for code execution
-- `SandboxRunner`: language-specific execution adapter
+- `API Server`: validates input, persists sessions, creates execution records, enqueues jobs
+- `PostgreSQL`: stores sessions, executions, and execution metadata
+- `Redis / BullMQ`: queues execution jobs between API and worker
+- `Worker`: orchestrates execution lifecycle out of band
+- `SandboxService`: selects the correct runtime implementation by language
+- `SandboxRunner`: per-language execution adapter
+- `DockerRunnerService`: shared low-level container execution helper
 
 ## 3. Project Structure
 
 ```text
-src/
-├── app.module.ts
-├── main.ts
-├── infrastructure/
-│   ├── database/
-│   │   └── typeorm.config.ts
-│   ├── queue/
-│   │   ├── queue.constants.ts
-│   │   ├── queue.module.ts
-│   │   └── queue.service.ts
-│   └── redis/
-│       ├── redis.client.ts
-│       └── redis.constants.ts
-├── modules/
-│   ├── code-sessions/
-│   │   ├── dto/
-│   │   │   ├── create-code-session.dto.ts
-│   │   │   └── update-code-session.dto.ts
-│   │   ├── entities/
-│   │   │   ├── code-session-status.enum.ts
-│   │   │   └── code-session.entity.ts
-│   │   ├── code-sessions.controller.ts
-│   │   ├── code-sessions.module.ts
-│   │   └── code-sessions.service.ts
-│   └── executions/
-│       ├── entities/
-│       │   ├── execution-event.entity.ts
-│       │   ├── execution-status.enum.ts
-│       │   └── execution.entity.ts
-│       ├── executions.controller.ts
-│       ├── executions.module.ts
-│       └── executions.service.ts
-├── sandbox/
-│   ├── runners/
-│   │   ├── javascript.runner.ts
-│   │   ├── python.runner.ts
-│   │   ├── sandbox-runner.interface.ts
-│   │   └── typescript.runner.ts
-│   ├── sandbox.module.ts
-│   ├── sandbox.service.ts
-│   └── sandbox.types.ts
-├── shared/
-│   └── config/
-│       ├── app.config.ts
-│       ├── database.config.ts
-│       ├── environment.validation.ts
-│       └── redis.config.ts
-└── workers/
-    └── code-execution.worker.ts
+.
+├── docker/
+│   └── sandbox/
+│       ├── node/
+│       │   └── Dockerfile
+│       └── python/
+│           └── Dockerfile
+├── src/
+│   ├── infrastructure/
+│   │   ├── database/
+│   │   ├── queue/
+│   │   └── redis/
+│   ├── modules/
+│   │   ├── code-sessions/
+│   │   └── executions/
+│   ├── sandbox/
+│   │   ├── docker/
+│   │   ├── runners/
+│   │   ├── sandbox.module.ts
+│   │   ├── sandbox.service.ts
+│   │   └── sandbox.types.ts
+│   ├── shared/
+│   │   └── config/
+│   ├── workers/
+│   │   └── code-execution.worker.ts
+│   ├── app.module.ts
+│   └── main.ts
+├── docker-compose.yml
+├── Dockerfile
+├── package.json
+└── .env.example
 ```
 
-## 4. Local Setup
+## 4. Docker Setup (Recommended)
+
+The recommended local workflow is Docker-first for infrastructure and app startup.
+
+Start the stack:
+
+```bash
+docker compose up --build
+```
+
+This starts:
+
+- `app`
+- `postgres`
+- `redis`
+
+Current limitation:
+
+- the worker is not yet included in `docker-compose.yml`
+- executions will stay in `QUEUED` until a worker process is started separately
+
+Start the worker in another terminal:
+
+```bash
+npm install
+npm run build
+npm run build:sandbox
+npm run start:worker
+```
+
+Expected startup signals:
+
+- Postgres: `database system is ready to accept connections`
+- Redis: `Ready to accept connections tcp`
+- App: `Nest application successfully started`
+
+Stop the stack:
+
+```bash
+docker compose down
+```
+
+## 5. Local Setup (Non-Docker API Workflow)
+
+Use this workflow if you want to run the API process directly on the host.
 
 ### Prerequisites
 
@@ -122,27 +166,15 @@ src/
 - npm
 - Docker Desktop or Docker Engine
 
-### Start local dependencies
-
-```bash
-docker compose up -d
-docker compose ps
-```
-
-This starts:
-
-- PostgreSQL on `localhost:5432`
-- Redis on `localhost:6379`
-
-### Install dependencies
-
-```bash
-npm install
-```
-
 ### Environment variables
 
-Create `.env` from `.env.example` if needed. The local defaults are:
+Create `.env` from `.env.example`:
+
+```bash
+cp .env.example .env
+```
+
+Local defaults:
 
 ```env
 PORT=3000
@@ -157,33 +189,39 @@ REDIS_HOST=localhost
 REDIS_PORT=6379
 ```
 
-### Run the API server
+### Start dependencies
 
 ```bash
+docker compose up -d postgres redis
+```
+
+### Install and run
+
+```bash
+npm install
+npm run build
+npm run build:sandbox
 npm run start:dev
 ```
 
-### Build the project
-
-```bash
-npm run build
-```
-
-### Run the worker
-
-Use either command:
+Start the worker in a second terminal:
 
 ```bash
 npm run start:worker
 ```
 
-or:
+## 6. Docker Networking
 
-```bash
-node dist/workers/code-execution.worker.js
-```
+Inside Docker Compose, containers do not use `localhost` to reach each other. In a container, `localhost` points back to that same container, not to Postgres or Redis.
 
-## 5. API Documentation
+That is why the app container uses:
+
+- `DATABASE_HOST=postgres`
+- `REDIS_HOST=redis`
+
+Docker Compose provides internal DNS for service names, so `postgres` resolves to the Postgres container and `redis` resolves to the Redis container on the same Compose network.
+
+## 7. API Documentation
 
 Base URL:
 
@@ -212,12 +250,12 @@ Response:
 
 ```json
 {
-  "id": "6bca9764-931b-4ea1-ab0d-a36d7a626bc3",
+  "id": "15486c46-ba9f-4255-bd63-09578cbbaa5a",
   "language": "python",
   "sourceCode": "",
   "status": "ACTIVE",
-  "createdAt": "2026-03-16T13:35:01.725Z",
-  "updatedAt": "2026-03-16T13:35:01.725Z"
+  "createdAt": "2026-03-17T09:15:37.522Z",
+  "updatedAt": "2026-03-17T09:15:37.522Z"
 }
 ```
 
@@ -234,7 +272,7 @@ Content-Type: application/json
 
 ```json
 {
-  "sourceCode": "print('hello from test')"
+  "sourceCode": "print(\"hello docker test\")"
 }
 ```
 
@@ -242,12 +280,12 @@ Response:
 
 ```json
 {
-  "id": "6bca9764-931b-4ea1-ab0d-a36d7a626bc3",
+  "id": "b2bafd38-7670-4424-954a-79542b21622d",
   "language": "python",
-  "sourceCode": "print('hello from test')",
+  "sourceCode": "print(\"hello docker test\")",
   "status": "ACTIVE",
-  "createdAt": "2026-03-16T13:35:01.725Z",
-  "updatedAt": "2026-03-16T13:35:01.871Z"
+  "createdAt": "2026-03-17T09:15:50.796Z",
+  "updatedAt": "2026-03-17T09:15:50.838Z"
 }
 ```
 
@@ -265,7 +303,7 @@ Response:
 
 ```json
 {
-  "executionId": "57d8f300-49df-4b33-b30a-18cba467a1d1",
+  "executionId": "c898ec06-8a3e-45e3-872f-b2ed110403ad",
   "status": "QUEUED"
 }
 ```
@@ -274,34 +312,30 @@ Response:
 
 Get the current execution state and result.
 
-Request:
-
-```http
-GET /executions/:executionId
-```
-
 Response after worker completion:
 
 ```json
 {
-  "id": "57d8f300-49df-4b33-b30a-18cba467a1d1",
-  "sessionId": "627bddcc-e9c6-45be-b3dc-352e22601da1",
+  "id": "c898ec06-8a3e-45e3-872f-b2ed110403ad",
+  "sessionId": "b2bafd38-7670-4424-954a-79542b21622d",
   "status": "COMPLETED",
-  "stdout": "Hello from Python sandbox",
+  "stdout": "hello docker test\n",
   "stderr": null,
-  "executionTimeMs": 1000,
+  "executionTimeMs": 491,
   "exitCode": 0,
-  "queuedAt": "2026-03-16T13:35:25.305Z",
-  "startedAt": "2026-03-16T13:35:25.345Z",
-  "finishedAt": "2026-03-16T13:35:25.354Z",
+  "queuedAt": "2026-03-17T09:15:50.849Z",
+  "startedAt": "2026-03-17T09:16:53.377Z",
+  "finishedAt": "2026-03-17T09:16:54.058Z",
   "retryCount": 0,
   "events": [],
-  "createdAt": "2026-03-16T13:35:25.309Z",
-  "updatedAt": "2026-03-16T13:35:25.362Z"
+  "createdAt": "2026-03-17T09:15:50.850Z",
+  "updatedAt": "2026-03-17T09:16:54.062Z"
 }
 ```
 
-## 6. Execution Flow
+If the worker is not running, the execution will remain in `QUEUED`.
+
+## 8. Execution Flow
 
 Execution lifecycle:
 
@@ -314,49 +348,40 @@ Detailed flow:
 
 1. API receives `POST /code-sessions/:sessionId/run`
 2. API loads the session
-3. API creates an `Execution` record with:
-   - `status = QUEUED`
-   - `queuedAt = now()`
+3. API creates an `Execution` record with `status = QUEUED`
 4. API enqueues BullMQ job `run-code`
 5. Worker receives the job
 6. Worker marks execution as `RUNNING`
-7. Worker calls `SandboxService.runCode(language, sourceCode)`
-8. Runner returns `stdout`, `stderr`, `exitCode`, `executionTimeMs`
-9. Worker updates the execution:
-   - `COMPLETED` when `exitCode === 0`
-   - `FAILED` when `exitCode !== 0`
+7. Worker loads the latest session source
+8. Worker calls `SandboxService.runCode(language, sourceCode)`
+9. Sandbox executes the code inside a language-specific container
+10. Worker updates `stdout`, `stderr`, `exitCode`, `executionTimeMs`, and final status
 
-## Autosave Behavior
+## 9. Autosave Behavior
 
-The editor should not send an API request on every keystroke. Doing so would generate excessive `PATCH /code-sessions/:sessionId` traffic, increase server load, and create unnecessary database writes during active typing.
+The editor should not send an API request on every keystroke. Doing so would create excessive `PATCH /code-sessions/:sessionId` traffic, unnecessary database writes, and noisy queue-triggering behavior around active editing.
 
-The expected strategy is debounced autosave: the client waits for a short idle window, typically `300-500ms`, after the user stops typing before sending the latest `sourceCode`. This keeps updates frequent enough for a responsive editing experience without turning typing into a request storm.
+The expected strategy is debounced autosave: the client waits for a short idle window, typically `300-500ms`, after the user stops typing before sending the latest `sourceCode`.
 
-In the current system, each autosave updates the persisted session source in PostgreSQL. That ensures `POST /code-sessions/:sessionId/run` always executes the most recently saved code, so the worker processes the latest available source.
+Because the API persists the latest source into PostgreSQL, `POST /code-sessions/:sessionId/run` always executes the most recently saved code. This keeps execution consistent with the editor state while reducing server load and improving UX.
 
-Benefits include lower API volume, reduced backend load, better perceived editor performance, and a more stable user experience. Future improvements may include diff-based updates or collaborative editing models such as CRDTs.
+Future improvements may include diff-based updates or collaborative editing models such as CRDTs.
 
-## 7. Queue & Worker Design
+## 10. Queue & Worker Design
 
 Why use a queue:
 
 - execution should not block HTTP requests
-- API response should be fast even when execution takes time
-- queue decouples request handling from execution processing
-- background processing is easier to scale later
+- API response should stay fast even for expensive runs
+- the request path stays small and predictable
+- retry and scaling strategies become easier later
 
 Why a separate worker process:
 
 - isolates execution orchestration from the API server
-- prevents long-running jobs from impacting request latency
-- allows independent scaling of API and execution capacity
-- creates a clean boundary for future sandbox hardening
-
-Why asynchronous execution:
-
-- client receives an `executionId` immediately
-- result can be polled independently
-- safer foundation for heavy or slow workloads
+- keeps sandbox startup cost off the request path
+- allows API and worker to scale independently
+- provides a clean boundary for future sandbox hardening
 
 Queue details:
 
@@ -370,9 +395,9 @@ Queue details:
 }
 ```
 
-## 8. Sandbox Design
+## 11. Sandbox Design
 
-The sandbox layer hides language-specific execution details behind a stable abstraction.
+The sandbox layer is no longer mock-based. Each execution is run inside a short-lived Docker container selected by language.
 
 Design:
 
@@ -383,98 +408,159 @@ Worker
           -> PythonRunner
           -> JavascriptRunner
           -> TypescriptRunner
+              -> DockerRunnerService
+                  -> docker run
 ```
 
-Responsibilities:
+Execution model:
 
-- `SandboxService`
-  - normalizes language input
-  - selects the correct runner
-  - throws a clear error if no runner supports the language
-- `SandboxRunner`
-  - defines the contract for execution adapters
-- language runners
-  - implement environment-specific execution behavior
+- the worker loads the session source code
+- the runner creates a temporary working directory
+- the source file is written to that directory
+- the directory is bind-mounted read-only into `/workspace`
+- a fresh container is started for the execution
+- stdout, stderr, exit code, and execution time are captured
+- the container is removed after the run
+- the temp directory is deleted after cleanup
 
-Current state:
+Security and isolation controls currently applied:
 
-- runners are mock implementations
-- they return normalized `SandboxExecutionResult`
-- no real containerized execution yet
+- `--rm`
+- `--network none`
+- `--read-only`
+- `--cap-drop ALL`
+- `--security-opt no-new-privileges=true`
+- tmpfs mounts for `/tmp` and `/run`
+- CPU limits
+- memory limits
+- `pids-limit`
 
-This design keeps the worker simple and makes it easy to add:
+Language support currently implemented:
 
-- `GoRunner`
-- `JavaRunner`
-- `CppRunner`
-- real Docker-backed runners
+- Python via `edtronaut-python-runner`
+- JavaScript via `edtronaut-node-runner`
+- TypeScript via `edtronaut-node-runner` + `tsx`
 
-## 9. Assumptions
+This keeps the worker language-agnostic and makes it straightforward to add runners for Go, Java, or C++ later.
 
-Current assumptions in this phase:
+## 12. Sandbox Limitations
 
-- execution happens in a trusted development environment
-- sandbox runners are mock implementations
-- one worker instance is enough for local development
-- clients poll `GET /executions/:executionId` for results
-- PostgreSQL and Redis are available locally via Docker Compose
+Current sandbox limitations:
 
-## 10. Trade-offs
+- each execution pays a cold-start container cost
+- containers are not reused or pooled
+- dependencies are not cached per project or session
+- no support yet for long-running interactive jobs
+- no package installation workflow inside executions
+- no compilation pipeline yet for heavier compiled languages
 
-Current trade-offs are intentional to keep the foundation small and extensible.
+These are acceptable trade-offs for the current phase, where correctness and isolation are more important than execution throughput.
 
-- no real sandbox isolation yet
-- no Docker-based code execution yet
-- no CPU or memory limits
-- no per-language compilation pipeline
-- no execution timeout enforcement at runner level
-- no rate limiting or abuse protection
-- no multi-tenant isolation
-- no advanced retry or dead-letter handling
+## 13. Idempotency and Duplicate Execution Handling
 
-## 11. Future Improvements
+The current system accepts every `run` request as a new execution. That is fine for an early phase, but it leaves room for duplicate runs caused by retries, double-clicks, or client reconnect behavior.
+
+A production design should add explicit duplicate handling, for example:
+
+- an idempotency key supplied by the client
+- or a derived execution fingerprint such as `hash(sessionId + sourceCode + language)`
+
+That would make it possible to reject or reuse equivalent executions while keeping queue behavior predictable.
+
+## 14. Scaling Strategy
+
+The architecture is designed so API and worker capacity can scale independently.
+
+- API instances scale based on HTTP traffic
+- worker instances scale based on queue depth and execution throughput
+- Redis acts as the broker between the two
+- PostgreSQL remains the source of truth for execution state
+
+This is the main benefit of the `API -> Queue -> Worker -> Sandbox` split: request handling and execution capacity do not need to scale together.
+
+## 15. Assumptions
+
+Current assumptions:
+
+- one worker instance is sufficient for local development
+- executions are short-lived batch runs, not interactive sessions
+- clients poll `GET /executions/:executionId` for result retrieval
+- Redis and PostgreSQL are available through Docker Compose
+- local Docker is trusted and available to the worker host
+
+## 16. Trade-offs
+
+Current trade-offs are intentional:
+
+- worker is still started separately from Docker Compose
+- database schema currently relies on TypeORM `synchronize` in development
+- no dead-letter queue or advanced retry policy
+- no rate limiting or abuse controls
+- no multi-tenant resource scheduling
+- no persistent execution artifact storage
+
+## 17. Future Improvements
 
 Likely next steps:
 
-- replace mock runners with Docker-based sandbox execution
-- add hard execution timeouts
-- enforce CPU, memory, and filesystem limits
-- support compiled languages and build steps
+- add worker as a Compose service for full Docker-first local startup
+- move from `synchronize` to migrations
+- add execution timeout enforcement at queue and runner levels
 - persist `execution_events` during lifecycle transitions
-- add worker autoscaling
-- add dead-letter queue and retry policy
-- add container pooling and warm runtimes
-- add result streaming or websocket updates
-- add observability and job metrics
+- add dead-letter handling and retries
+- add worker autoscaling rules
+- add container pooling and warm runtime strategies
+- add package-install or dependency-cache flows for supported languages
+- add streaming output or websocket-based execution updates
+- add observability and execution metrics
 
-## 12. Development Notes
+## 18. Development Notes
 
-Important local behavior:
+Recommended workflow is now Docker-first.
 
-- the API server and worker are separate processes
-- if the worker is not running, executions will remain in `QUEUED`
-- `npm run start:dev` starts only the API server
-- `npm run start:worker` starts only the worker
-
-Recommended local workflow:
-
-Terminal 1:
+Option A, Docker-first API:
 
 ```bash
-npm run start:dev
+docker compose up --build
 ```
 
-Terminal 2:
+Then start the worker separately:
 
 ```bash
+npm install
 npm run build
+npm run build:sandbox
 npm run start:worker
 ```
 
-Terminal 3:
+Option B, host-run API:
 
 ```bash
-xh --ignore-stdin POST http://127.0.0.1:3000/code-sessions language=python
+docker compose up -d postgres redis
+npm install
+npm run build
+npm run build:sandbox
+npm run start:dev
 ```
 
-If you call `POST /code-sessions/:sessionId/run` and the execution never leaves `QUEUED`, the first thing to check is whether the worker process is running.
+Then start the worker:
+
+```bash
+npm run start:worker
+```
+
+Important behavior:
+
+- the worker is a separate process
+- if the worker is not running, executions stay in `QUEUED`
+- app container uses `DATABASE_HOST=postgres` and `REDIS_HOST=redis`
+- sandbox images must exist before the worker can execute code:
+
+```bash
+npm run build:sandbox
+```
+
+The worker can run either:
+
+- locally on the host
+- or in a future containerized worker service
